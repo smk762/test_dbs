@@ -16,6 +16,8 @@ services:
       timeout: 5s
       retries: 5
     shm_size: 256mb
+    networks:
+      - shared
 
   redis:
     image: redis:7
@@ -30,6 +32,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - shared
 
   minio:
     image: minio/minio:latest
@@ -48,6 +52,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - shared
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -62,6 +68,8 @@ services:
       interval: 20s
       timeout: 5s
       retries: 10
+    networks:
+      - shared
 
   cloudflared:
     image: cloudflare/cloudflared:latest
@@ -80,13 +88,14 @@ services:
     security_opt:
       - no-new-privileges:true
     read_only: true
+    networks:
+      - shared
 
   node-exporter:
     image: prom/node-exporter:latest
     container_name: node-exporter
     restart: unless-stopped
     pid: host
-    network_mode: host
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -96,29 +105,47 @@ services:
       - --path.rootfs=/rootfs
       - --path.sysfs=/host/sys
       - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
-    # Exposes on host port 9100
+    ports:
+      - "0.0.0.0:9100:9100"
+    networks:
+      - shared
 
   redis-exporter:
     image: oliver006/redis_exporter:latest
     container_name: redis-exporter
     restart: unless-stopped
-    network_mode: host
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
-      REDIS_ADDR: "redis://localhost:${REDIS_PORT:-6379}"
+      REDIS_ADDR: "redis://redis:6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
-    # Exposes on host port 9121
+    ports:
+      - "0.0.0.0:9121:9121"
+    networks:
+      - shared
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: postgres-exporter
     restart: unless-stopped
-    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT:-5432}/${POSTGRES_DB}?sslmode=disable"
-    # Exposes on host port 9187
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    ports:
+      - "0.0.0.0:9187:9187"
+    networks:
+      - shared
 
 volumes:
   pgdata:
   redisdata:
   miniodata:
   qdrantdata:
+
+networks:
+  shared:
+    name: test_dbs_default
+    external: true
