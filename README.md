@@ -64,3 +64,65 @@ docker compose up -d <service>  # manual start for specific service(s)
 ```
 
 Data is stored in Docker named volumes (`pgdata`, `redisdata`, `miniodata`, `qdrantdata`) and survives `docker compose down` unless `-v` is passed.
+
+## MinIO Familiar Artifact Policy (`kimini` bucket)
+
+The `kimini` bucket stores familiar pipeline artifacts. Prefixes are virtual and are created automatically on first write. Do not pre-create empty prefixes.
+
+| Prefix | Contents | Retention |
+|---|---|---|
+| `familiar/datasets/{familiar_id}/{version}/` | Training images, resized copies | Indefinite |
+| `familiar/captions/{familiar_id}/{version}/` | Caption `.txt` files per image | Indefinite |
+| `familiar/adapters/{familiar_id}/{adapter_id}/` | `.safetensors` weights, config YAML | Indefinite |
+| `familiar/evals/{familiar_id}/{run_id}/` | Eval-generated images + metadata JSON | Permanent delete at 90 days |
+| `familiar/archive/{familiar_id}/` | Full archival bundles (`.zip` / `.tar`) | Indefinite |
+| `familiar/personality/{familiar_id}/{version}/` | Personality card YAML exports | Indefinite |
+
+### Lifecycle Rule Enforcement
+
+Apply lifecycle policy to permanently delete eval artifacts under `familiar/evals/` after 90 days:
+
+```bash
+# Load credentials from .env
+set -a && source .env && set +a
+
+# Create the bucket if missing (using minio/mc container)
+docker run --rm --network test_dbs_default \
+  -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
+  minio/mc mb --ignore-existing local/kimini
+
+# Add lifecycle rule for eval artifacts
+docker run --rm --network test_dbs_default \
+  -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
+  minio/mc ilm add --expire-days 90 --prefix "familiar/evals/" local/kimini
+
+# Verify rules
+docker run --rm --network test_dbs_default \
+  -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
+  minio/mc ilm ls local/kimini
+```
+
+Note: no tiering is configured in this stack; expiration is a permanent delete.
+
+## Redis Validation Checklist
+
+This section is documentation-only. Do not apply Redis config changes from this checklist.
+
+### Database Index Assignments
+
+- [ ] `DB 0` is used by application services in this stack.
+- [ ] `kimini` task queues use `taskiq:*` key prefixes in `DB 0`.
+- [ ] `gothmog` orchestration keys use `orcq:*` and `orcr:*` key prefixes in `DB 0`.
+- [ ] If future isolation is needed, assign dedicated DB indexes per service and update this README.
+
+### Key Naming Conventions
+
+- [ ] Queue/list keys use descriptive namespaces (examples: `taskiq:gen:high`, `taskiq:gen:default`, `taskiq:gen:low`, `orcq:runs`).
+- [ ] Run/result cache keys include stable IDs (example: `orcr:{run_id}`).
+- [ ] New services must use a unique namespace prefix to avoid collisions.
+
+### TTL Expectations
+
+- [ ] Queue/work-dispatch keys generally have no TTL while active.
+- [ ] Result/cache keys should set explicit TTLs only when data is safely reconstructable.
+- [ ] If a service depends on expiration behavior, document the exact TTL and key pattern in this README.
